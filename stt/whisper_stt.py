@@ -18,7 +18,9 @@ class WhisperSTT:
         model_id: str = "Oriserve/Whisper-Hindi2Hinglish-Apex",
     ):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        # self.dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        
+        self.dtype = torch.float32
 
         print(f"[WhisperSTT] Loading model on {self.device}...")
 
@@ -143,6 +145,14 @@ if __name__ == "__main__":
                 # Strip Smart Turn padding
                 nonzero = np.nonzero(audio_8s)[0]
                 raw_audio = audio_8s[nonzero[0]:] if len(nonzero) > 0 else audio_8s
+
+                def rms(audio: np.ndarray) -> float:
+                    return np.sqrt(np.mean(audio ** 2))
+
+                if rms(raw_audio) < 0.005:
+                    print("⚠️ Skipping STT (audio too quiet)")
+                    buffer.reset()
+                    return
 
                 stt_queue.put(raw_audio)
                 buffer.reset()
