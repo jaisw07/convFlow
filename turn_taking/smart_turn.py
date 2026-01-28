@@ -54,7 +54,7 @@ class SmartTurnV3:
 
         return is_complete, probability
     
-if __name__ == "__main__":
+""" if __name__ == "__main__":
     import time
 
     from audio.mic_input import MicInput
@@ -100,4 +100,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
-        mic.stop()
+        mic.stop() """
