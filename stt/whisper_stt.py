@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
                 # Strip Smart Turn padding
                 nonzero = np.nonzero(audio_8s)[0]
-                raw_audio = audio_8s[nonzero[0]:] if len(nonzero) > 0 else audio_8s
+                raw_audio = buffer.get_full_turn_audio()
 
                 def rms(audio: np.ndarray) -> float:
                     return np.sqrt(np.mean(audio ** 2))

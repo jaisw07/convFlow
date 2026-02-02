@@ -7,10 +7,9 @@ class TurnBuffer:
     Accumulates audio frames for a single user turn.
 
     Responsibilities:
-    - Collect speech audio
+    - Collect full speech turn (for STT)
+    - Maintain rolling 8s window (for Smart Turn)
     - Track silence duration
-    - Truncate to last N seconds
-    - Pad audio correctly for Smart Turn
     """
 
     def __init__(
@@ -21,15 +20,6 @@ class TurnBuffer:
         silence_trigger_ms: int = 500,
         frame_duration_ms: int = 40,
     ):
-        """
-        Args:
-            sample_rate: Audio sample rate (16kHz)
-            max_turn_seconds: Max audio length Smart Turn supports
-            min_speech_seconds: Minimum speech before we consider a valid turn
-            silence_trigger_ms: Silence duration before checking Smart Turn
-            frame_duration_ms: Frame size in milliseconds
-        """
-
         self.sample_rate = sample_rate
         self.max_samples = int(sample_rate * max_turn_seconds)
         self.min_speech_samples = int(sample_rate * min_speech_seconds)
@@ -38,8 +28,13 @@ class TurnBuffer:
             silence_trigger_ms / frame_duration_ms
         )
 
+        # Full turn buffer (for STT)
         self.frames = deque()
         self.total_samples = 0
+
+        # Smart Turn rolling buffer (last 8s only)
+        self.smart_turn_frames = deque()
+        self.smart_turn_samples = 0
 
         self._silent_frames = 0
         self._has_speech = False
@@ -47,31 +42,31 @@ class TurnBuffer:
     # ---------- Frame ingestion ----------
 
     def add_speech_frame(self, frame: np.ndarray) -> None:
-        """Add a frame that contains speech."""
         self.frames.append(frame)
         self.total_samples += len(frame)
+
+        self.smart_turn_frames.append(frame)
+        self.smart_turn_samples += len(frame)
+
         self._silent_frames = 0
         self._has_speech = True
 
-        self._truncate_if_needed()
+        self._truncate_smart_turn_if_needed()
 
     def add_silence_frame(self, frame: np.ndarray) -> None:
-        """Add a frame that is silence."""
         self.frames.append(frame)
         self.total_samples += len(frame)
+
+        self.smart_turn_frames.append(frame)
+        self.smart_turn_samples += len(frame)
+
         self._silent_frames += 1
 
-        self._truncate_if_needed()
+        self._truncate_smart_turn_if_needed()
 
     # ---------- Turn logic ----------
 
     def should_check_turn(self) -> bool:
-        """
-        Returns True if:
-        - We've heard speech
-        - We've accumulated enough speech
-        - We've seen enough silence after speech
-        """
         if not self._has_speech:
             return False
 
@@ -80,12 +75,10 @@ class TurnBuffer:
 
         return self._silent_frames >= self.silence_trigger_frames
 
+    # ---------- Audio retrieval ----------
+
     def get_audio_for_smart_turn(self) -> np.ndarray:
-        """
-        Returns audio padded/truncated to EXACTLY max_turn_seconds.
-        Padding is added at the BEGINNING (Smart Turn requirement).
-        """
-        audio = np.concatenate(list(self.frames))
+        audio = np.concatenate(list(self.smart_turn_frames))
 
         if len(audio) > self.max_samples:
             audio = audio[-self.max_samples:]
@@ -96,55 +89,28 @@ class TurnBuffer:
 
         return audio.astype(np.float32)
 
+    def get_full_turn_audio(self) -> np.ndarray:
+        """Return full turn audio for STT."""
+        if not self.frames:
+            return np.zeros(0, dtype=np.float32)
+
+        return np.concatenate(list(self.frames)).astype(np.float32)
+
+    # ---------- Reset ----------
+
     def reset(self) -> None:
-        """Clear buffer after a turn completes."""
         self.frames.clear()
+        self.smart_turn_frames.clear()
+
         self.total_samples = 0
+        self.smart_turn_samples = 0
+
         self._silent_frames = 0
         self._has_speech = False
 
     # ---------- Internal helpers ----------
 
-    def _truncate_if_needed(self) -> None:
-        """Ensure buffer never exceeds max_samples."""
-        while self.total_samples > self.max_samples:
-            removed = self.frames.popleft()
-            self.total_samples -= len(removed)
-            
-""" if __name__ == "__main__":
-    import time
-    from mic_input import MicInput
-    from vad import SileroVAD
-
-    buffer = TurnBuffer()
-    vad = SileroVAD()
-    mic = MicInput()
-
-    print("🎤 Speak for a bit, then pause.")
-    print("We will print when TurnBuffer decides to check Smart Turn.\n")
-
-    def on_audio_frame(frame):
-        is_speaking = vad.process_frame(frame)
-
-        if is_speaking:
-            buffer.add_speech_frame(frame)
-        else:
-            buffer.add_silence_frame(frame)
-
-        if buffer.should_check_turn():
-            audio = buffer.get_audio_for_smart_turn()
-            print("🧠 TurnBuffer triggered Smart Turn check")
-            print(f"   Audio shape: {audio.shape}")
-            print(f"   Duration: {len(audio) / 16000:.2f} seconds\n")
-
-            buffer.reset()
-
-    mic.start(on_audio_frame)
-
-    try:
-        while True:
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        print("\nStopping...")
-    finally:
-        mic.stop() """
+    def _truncate_smart_turn_if_needed(self) -> None:
+        while self.smart_turn_samples > self.max_samples:
+            removed = self.smart_turn_frames.popleft()
+            self.smart_turn_samples -= len(removed)
