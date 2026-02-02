@@ -18,7 +18,7 @@ class TurnBuffer:
         max_turn_seconds: float = 8.0,
         min_speech_seconds: float = 1.5,
         silence_trigger_ms: int = 500,
-        frame_duration_ms: int = 40,
+        frame_duration_ms: int = 32,
     ):
         self.sample_rate = sample_rate
         self.max_samples = int(sample_rate * max_turn_seconds)

@@ -16,7 +16,7 @@ class SileroVAD:
         sample_rate: int = 16000,
         speech_threshold: float = 0.5,
         min_silence_ms: int = 500,
-        frame_duration_ms: int = 30,
+        frame_duration_ms: int = 32,
     ):
         """
         Args:
