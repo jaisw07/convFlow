@@ -84,7 +84,7 @@ class WhisperSTT:
 # LIVE DEMO (turn-taking + STT)
 # ------------------------------------------------------------------
 
-if __name__ == "__main__":
+""" if __name__ == "__main__":
     import time
     import queue
     import threading
@@ -169,4 +169,4 @@ if __name__ == "__main__":
     finally:
         mic.stop()
         stt_queue.put(None)
-        stt_queue.join()
+        stt_queue.join() """
