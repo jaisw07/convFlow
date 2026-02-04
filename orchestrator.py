@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
     tts = PiperTTS(
         piper_bin=r"C:\Users\SHREY\Desktop\SpeechToText\piper_windows_amd64\piper\piper.exe",
-        voice_model="audio/voices/en_GB-cori-high.onnx",
+        voice_model="audio/voices/en_GB-alan-low.onnx",
     )
 
     # Queue of completed turns (audio)

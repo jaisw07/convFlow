@@ -6,7 +6,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-SAMPLE_RATE = 22050  # Piper default
+SAMPLE_RATE = 16000  # Piper default
 
 
 class PiperTTS:
