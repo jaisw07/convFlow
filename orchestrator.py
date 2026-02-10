@@ -16,7 +16,7 @@ from audio.buffer import TurnBuffer
 from turn_taking.smart_turn import SmartTurnV3
 from stt.whisper_stt import WhisperSTT
 from llm.llm import GeminiLLM
-from audio.tts import PiperTTS
+from audio.tts.factory import create_tts
 
 
 # ------------------------------------------------------------------
@@ -48,7 +48,8 @@ if __name__ == "__main__":
     stt = WhisperSTT()
     llm = GeminiLLM()
 
-    tts = PiperTTS(
+    tts = create_tts(
+        engine="piper",
         piper_bin=r"C:\Users\SHREY\Desktop\SpeechToText\piper_windows_amd64\piper\piper.exe",
         voice_model="audio/voices/en_GB-alan-low.onnx",
     )
