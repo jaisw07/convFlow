@@ -1,5 +1,5 @@
 from audio.tts.piper_tts import PiperTTS
-
+from audio.tts.kokoro_tts import KokoroTTS
 
 def create_tts(engine: str, **kwargs):
     """
@@ -17,5 +17,8 @@ def create_tts(engine: str, **kwargs):
 
     if engine == "piper":
         return PiperTTS(**kwargs)
+    
+    elif engine == "kokoro":
+        return KokoroTTS(**kwargs)
 
     raise ValueError(f"Unknown TTS engine: {engine}")

@@ -48,10 +48,17 @@ if __name__ == "__main__":
     stt = WhisperSTT()
     llm = GeminiLLM()
 
+    # tts = create_tts(
+    #     engine="piper",
+    #     piper_bin=r"C:\Users\SHREY\Desktop\SpeechToText\piper_windows_amd64\piper\piper.exe",
+    #     voice_model="audio/voices/en_GB-alan-low.onnx",
+    # )
+
     tts = create_tts(
-        engine="piper",
-        piper_bin=r"C:\Users\SHREY\Desktop\SpeechToText\piper_windows_amd64\piper\piper.exe",
-        voice_model="audio/voices/en_GB-alan-low.onnx",
+        engine="kokoro",
+        lang_code="a",
+        voice="af_heart",
+        speed=1.0,
     )
 
     tts_busy = threading.Event()
