@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-
+from typing import Optional, Callable
 
 class BaseTTS(ABC):
     """
@@ -9,6 +9,8 @@ class BaseTTS(ABC):
     - speak(text): start speaking asynchronously
     - stop(): interrupt current speech
     """
+    def __init__(self):
+        self.on_done: Optional[Callable[[], None]] = None
 
     @abstractmethod
     def speak(self, text: str):

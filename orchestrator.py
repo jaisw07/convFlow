@@ -54,6 +54,14 @@ if __name__ == "__main__":
         voice_model="audio/voices/en_GB-alan-low.onnx",
     )
 
+    tts_busy = threading.Event()
+
+    def on_tts_done():
+        print("TTS Finished, Resuming Mic\n")
+        tts_busy.clear()
+
+    tts.on_done = on_tts_done
+
     # Queue of completed turns (audio)
     turn_queue = queue.Queue()
 
@@ -93,6 +101,8 @@ if __name__ == "__main__":
                 print(f"🤖 Gemini:\n{response}\n")
 
                 # ------------------ TTS ------------------
+                print("Pausing mic. TTS speaking.\n")
+                tts_busy.set()
                 tts.speak(response)
 
                 # ------------------ Memory ------------------
@@ -114,6 +124,10 @@ if __name__ == "__main__":
     # --------------------------------------------------------------
 
     def on_audio_frame(frame: np.ndarray):
+        # ignore mic while tts speaking
+        if tts_busy.is_set():
+            return
+        
         is_speaking = vad.process_frame(frame)
 
         if is_speaking:

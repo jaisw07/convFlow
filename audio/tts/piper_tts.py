@@ -121,3 +121,6 @@ class PiperTTS(BaseTTS):
         finally:
             if os.path.exists(wav_path):
                 os.remove(wav_path)
+            # 🔔 Notify orchestrator that TTS is done
+            if self.on_done:
+                self.on_done()
