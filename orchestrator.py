@@ -61,6 +61,16 @@ if __name__ == "__main__":
         speed=1.0,
     )
 
+    # tts = create_tts(
+    #     engine="f5",
+    #     ref_audio_path=r"C:\Users\SHREY\Documents\Sound Recordings\tanmay_sample.wav",
+    #     ref_text="I'm just going to tell you my life's journey in very simple words, and which may not leave you inspired, but will help you survive this life.",
+    #     device="cuda",
+    #     speed = 1.0,
+    #     nfe_step=24,   # lower = faster, slightly lower quality
+    # )
+
+
     tts_busy = threading.Event()
 
     def on_tts_done():
