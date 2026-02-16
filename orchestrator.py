@@ -18,6 +18,9 @@ from stt.whisper_stt import WhisperSTT
 from llm.llm import GeminiLLM
 from audio.tts.factory import create_tts
 
+from state.state import InterviewState
+from state.evaluator import AnswerEvaluator
+
 
 # ------------------------------------------------------------------
 # Configuration
@@ -47,6 +50,8 @@ if __name__ == "__main__":
 
     stt = WhisperSTT()
     llm = GeminiLLM()
+    evaluator = AnswerEvaluator()
+    state = InterviewState(topic="Technical Interview")
 
     # tts = create_tts(
     #     engine="piper",
@@ -104,10 +109,43 @@ if __name__ == "__main__":
                     continue
 
                 print(f"📝 You said:\n{transcript}\n")
+                # ------------------ EVALUATION ------------------
 
-                # ------------------ LLM ------------------
+                if state.current_question is None:
+                    # first turn: no evaluation
+                    eval_result = {
+                        "score": 0.5,
+                        "depth": "medium",
+                        "feedback": "First turn"
+                    }
+                else:
+                    eval_result = evaluator.evaluate(
+                        question=state.current_question,
+                        answer=transcript,
+                    )
+
+                print(f"📊 Evaluation: {eval_result}\n")
+
+                state.adjust_difficulty()
+
+                # ------------------ LLM (Adaptive Prompt)  ------------------
+                adaptive_prompt = f"""
+                You are conducting a {state.topic}.
+
+                Current difficulty level: {state.difficulty}
+                Average score so far: {state.average_score():.2f}
+
+                Last evaluation:
+                Score: {eval_result.get("score")}
+                Depth: {eval_result.get("depth")}
+                Feedback: {eval_result.get("feedback")}
+
+                Based on the candidate's performance, ask the next best interview question.
+                Keep it concise.
+                """
+
                 response = llm.generate(
-                    user_text=transcript,
+                    user_text=adaptive_prompt,
                     context=conversation_history,
                 )
 
@@ -116,6 +154,15 @@ if __name__ == "__main__":
                     continue
 
                 print(f"🤖 Gemini:\n{response}\n")
+
+                state.record_turn(
+                    question=state.current_question or "Opening Question",
+                    answer=transcript,
+                    evaluation=eval_result,
+                )
+
+                state.current_question = response
+
 
                 # ------------------ TTS ------------------
                 print("Pausing mic. TTS speaking.\n")
@@ -139,6 +186,14 @@ if __name__ == "__main__":
     # --------------------------------------------------------------
     # Audio callback
     # --------------------------------------------------------------
+    pending_turn = {
+        "active": False,
+        "timestamp": 0.0,
+        "audio": None
+    }
+
+    CONFIRM_WINDOW = 0.25  # 250ms
+
 
     def on_audio_frame(frame: np.ndarray):
         # ignore mic while tts speaking
@@ -160,23 +215,42 @@ if __name__ == "__main__":
             print(f"   Complete: {complete}")
             print(f"   Probability: {prob:.4f}")
 
-            if complete:
-                raw_audio = buffer.get_full_turn_audio()
+            if complete and not pending_turn["active"]:
+                print("🟡 SmartTurn suggests turn end. Awaiting confirmation...")
+                pending_turn["active"] = True
+                pending_turn["timestamp"] = time.time()
+                pending_turn["audio"] = buffer.get_full_turn_audio()
+                return
+            
+            # ----------------------------------------
+            # Confirm pending turn if silence continues
+            # ----------------------------------------
 
-                def rms(audio: np.ndarray) -> float:
-                    return np.sqrt(np.mean(audio ** 2))
+            if pending_turn["active"]:
+                elapsed = time.time() - pending_turn["timestamp"]
 
-                if rms(raw_audio) < RMS_SILENCE_THRESHOLD:
-                    print("⚠️ Skipping turn (audio too quiet)\n")
-                    buffer.reset()
-                    return
+                if elapsed >= CONFIRM_WINDOW:
+                    # If still silent → commit
+                    if buffer._silent_frames >= buffer.silence_trigger_frames:
+                        raw_audio = pending_turn["audio"]
 
-                print("✅ Turn accepted. Processing...\n")
+                        def rms(audio: np.ndarray) -> float:
+                            return np.sqrt(np.mean(audio ** 2))
 
-                turn_queue.put(raw_audio)
-                buffer.reset()
-            else:
-                print("⏳ Not complete yet. Listening...\n")
+                        if rms(raw_audio) < RMS_SILENCE_THRESHOLD:
+                            print("⚠️ Skipping turn (audio too quiet)\n")
+                            buffer.reset()
+                        else:
+                            print("✅ Turn confirmed. Processing...\n")
+                            turn_queue.put(raw_audio)
+                            buffer.reset()
+
+                    else:
+                        print("⚠️ Speech resumed. Cancelling turn.\n")
+
+                    pending_turn["active"] = False
+
+
 
     # --------------------------------------------------------------
     # Start mic
