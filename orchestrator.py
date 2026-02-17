@@ -9,6 +9,7 @@ import time
 import queue
 import threading
 import numpy as np
+import random
 
 from audio.mic_input import MicInput
 from audio.vad import SileroVAD
@@ -17,6 +18,8 @@ from turn_taking.smart_turn import SmartTurnV3
 from stt.whisper_stt import WhisperSTT
 from llm.llm import GeminiLLM
 from audio.tts.factory import create_tts
+
+import orchestrator_helper
 
 from state.state import InterviewState
 from state.evaluator import AnswerEvaluator
@@ -51,7 +54,7 @@ if __name__ == "__main__":
     stt = WhisperSTT()
     llm = GeminiLLM()
     evaluator = AnswerEvaluator()
-    state = InterviewState(topic="Technical Interview")
+    state = InterviewState(topic="Fresher SDE Internship Interview")
 
     # tts = create_tts(
     #     engine="piper",
@@ -89,6 +92,29 @@ if __name__ == "__main__":
 
     # Conversation memory
     conversation_history = []
+    
+    # check valid transcript or not
+    def is_valid_transcript(text: str) -> bool:
+        if not text:
+            return False
+
+        stripped = text.strip()
+
+        if not stripped:
+            return False
+
+        lowered = stripped.lower()
+
+        # Reject common junk outputs
+        if lowered in {"nan", "none", "null"}:
+            return False
+
+        # Reject very short noise
+        if len(stripped) < 2:
+            return False
+
+        return True
+
 
     # --------------------------------------------------------------
     # Worker: STT → LLM → TTS
@@ -104,8 +130,17 @@ if __name__ == "__main__":
                 # ------------------ STT ------------------
                 transcript = stt.transcribe(audio)
 
-                if not transcript:
-                    print("⚠️ Empty transcript, skipping.\n")
+                if not is_valid_transcript(transcript):
+                    print("⚠️ Invalid transcript detected.\n")
+                    clarifications = [
+                        "I'm sorry, I didn't quite catch that. Could you please repeat your response?",
+                        "Apologies, there seems to have been some audio disruption. Would you mind repeating that?",
+                        "I may have missed your last statement. Could you clarify your answer?",
+                    ]
+                    choice = random.choice(clarifications)
+                    print(f"🤖 Gemini (clarification):\n{choice}\n")
+                    tts_busy.set()
+                    tts.speak(choice)
                     continue
 
                 print(f"📝 You said:\n{transcript}\n")
@@ -130,18 +165,18 @@ if __name__ == "__main__":
 
                 # ------------------ LLM (Adaptive Prompt)  ------------------
                 adaptive_prompt = f"""
-                You are conducting a {state.topic}.
+                    You are conducting a {state.topic}.
 
-                Current difficulty level: {state.difficulty}
-                Average score so far: {state.average_score():.2f}
+                    Current difficulty level: {state.difficulty}
+                    Average score so far: {state.average_score():.2f}
 
-                Last evaluation:
-                Score: {eval_result.get("score")}
-                Depth: {eval_result.get("depth")}
-                Feedback: {eval_result.get("feedback")}
+                    Last evaluation:
+                    Score: {eval_result.get("score")}
+                    Depth: {eval_result.get("depth")}
+                    Feedback: {eval_result.get("feedback")}
 
-                Based on the candidate's performance, ask the next best interview question.
-                Keep it concise.
+                    Based on the candidate's performance, ask the next best interview question.
+                    Keep it concise.
                 """
 
                 response = llm.generate(
