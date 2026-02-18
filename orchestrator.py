@@ -47,7 +47,7 @@ if __name__ == "__main__":
     stt = WhisperSTT()
     llm = GeminiLLM()
     evaluator = AnswerEvaluator()
-    state = InterviewState(topic="CyberSecurity Intern Interview")
+    state = InterviewState(topic="SDE Intern Interview")
 
     # tts = create_tts(
     #     engine="piper",
@@ -108,6 +108,29 @@ if __name__ == "__main__":
 
         return True
 
+    def decide_mode(state: InterviewState) -> str:
+        evaluation = state.last_evaluation
+
+        if not evaluation:
+            return "normal"
+
+        correctness = evaluation.get("correctness", 5)
+        depth = evaluation.get("technical_depth", 5)
+
+        if correctness < 4:
+            return "clarify_mistake"
+
+        if depth < 5:
+            return "probe_deeper"
+
+        if state.difficulty >= 3:
+            return "increase_difficulty"
+
+        if state.followup_stack:
+            return "use_followup"
+
+        return "continue_topic"
+
 
     # --------------------------------------------------------------
     # Worker: STT → LLM → TTS
@@ -142,9 +165,12 @@ if __name__ == "__main__":
                 if state.current_question is None:
                     # first turn: no evaluation
                     eval_result = {
-                        "score": 0.5,
-                        "depth": "medium",
-                        "feedback": "First turn"
+                        "technical_depth": 5,
+                        "correctness": 5,
+                        "clarity": 5,
+                        "confidence": 5,
+                        "red_flags": [],
+                        "followup_opportunities": []
                     }
                 else:
                     eval_result = evaluator.evaluate(
@@ -154,32 +180,47 @@ if __name__ == "__main__":
 
                 print(f"📊 Evaluation: {eval_result}\n")
 
+                # 1️⃣ Record turn FIRST
+                state.record_turn(
+                    question=state.current_question or "Opening Question",
+                    answer=transcript,
+                    evaluation=eval_result,
+                )
+
+                # 2️⃣ Adjust difficulty
                 state.adjust_difficulty()
 
-                # ------------------ LLM (Adaptive Prompt)  ------------------
+                # 3️⃣ Now decide mode (uses updated evaluation)
+                mode = decide_mode(state)
+
+                followup_instruction = ""
+                if mode == "use_followup" and state.followup_stack:
+                    followup = state.followup_stack.pop(0)
+                    followup_instruction = f"Ask this follow-up question: {followup}"
+
+                # 4️⃣ Now build prompt
                 adaptive_prompt = f"""
                     You are conducting a {state.topic}.
 
                     Current difficulty level: {state.difficulty}
-                    Average score so far: {state.average_score():.2f}
-
-                    Previously asked questions:
-                    {[turn["question"] for turn in state.history]}
-
-                    Last evaluation:
-                    Score: {eval_result.get("score")}
-                    Depth: {eval_result.get("depth")}
-                    Feedback: {eval_result.get("feedback")}
+                    Branching mode: {mode}
 
                     Rules:
-                    - Do NOT repeat any previously asked question.
-                    - Do NOT rephrase the same question.
-                    - Move forward in the interview.
+                    - Do NOT repeat previous questions.
+                    - Be concise.
+                    - Stay natural and conversational.
 
-                    Ask the next best interview question.
-                    Keep it concise.
+                    Branching behavior:
+                    - clarify_mistake → Ask the candidate to correct or reconsider their answer.
+                    - probe_deeper → Ask a deeper technical follow-up.
+                    - increase_difficulty → Ask a harder, more advanced question.
+                    - continue_topic → Continue the same topic naturally.
+                    - use_followup → Use the provided follow-up question.
+
+                    {followup_instruction}
+
+                    Ask the next question.
                 """
-
 
                 response = llm.generate(
                     user_text=adaptive_prompt,
@@ -192,11 +233,6 @@ if __name__ == "__main__":
 
                 print(f"🤖 Gemini:\n{response}\n")
 
-                state.record_turn(
-                    question=state.current_question or "Opening Question",
-                    answer=transcript,
-                    evaluation=eval_result,
-                )
 
                 state.current_question = response
 
@@ -350,6 +386,7 @@ if __name__ == "__main__":
     welcome_message = f"Welcome to your {state.topic}. Let's start off with a brief introduction about yourself."
     tts_busy.set()
     tts.speak(welcome_message)
+    state.current_question = welcome_message
 
     try:
         while True:

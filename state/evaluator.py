@@ -14,20 +14,27 @@ class AnswerEvaluator:
         )
 
     def evaluate(self, question: str, answer: str) -> dict:
-        prompt = f"""Evaluate the candidate answer. 
-                        Question: {question} 
-                        Answer: {answer}
-                        Return ONLY valid JSON.
-                        Do NOT include any text before or after the JSON.
-                        Do NOT explain anything.
-                        Be lenient in checking as this is targeted for freshers.
-                        Return strictly:
-                            {{
-                                "score": float between 0 and 1,
-                                "depth": "low" | "medium" | "high",
-                                "feedback": "short explanation"
-                            }}
-                """
+        prompt = f"""
+            You are a strict but fair technical interview evaluator for fresher candidates.
+
+            Question:
+            {question}
+
+            Candidate Answer:
+            {answer}
+
+            Return ONLY valid JSON. No explanation. No markdown.
+
+            Return strictly:
+            {{
+                    "technical_depth": integer 0-10,
+                    "correctness": integer 0-10,
+                    "clarity": integer 0-10,
+                    "confidence": integer 0-10,
+                    "red_flags": list of short strings,
+                    "followup_opportunities": list of short technical follow-up prompts
+            }}
+            """
 
         response = self.llm.generate(user_text=prompt)
         # 🔥 Strip possible markdown fences
@@ -50,7 +57,10 @@ class AnswerEvaluator:
 
         # fallback
         return {
-            "score": 0.5,
-            "depth": "medium",
-            "feedback": "Evaluation parsing failed."
+            "technical_depth": 5,
+            "correctness": 5,
+            "clarity": 5,
+            "confidence": 5,
+            "red_flags": [],
+            "followup_opportunities": []
         }
