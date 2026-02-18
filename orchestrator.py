@@ -119,15 +119,12 @@ if __name__ == "__main__":
 
         if correctness < 4:
             return "clarify_mistake"
+        
+        if state.followup_stack:
+            return "use_followup"
 
         if depth < 5:
             return "probe_deeper"
-
-        if state.difficulty >= 3:
-            return "increase_difficulty"
-
-        if state.followup_stack:
-            return "use_followup"
 
         return "continue_topic"
 
@@ -202,13 +199,14 @@ if __name__ == "__main__":
                 adaptive_prompt = f"""
                     You are conducting a {state.topic}.
 
-                    Current difficulty level: {state.difficulty}
+                    Current difficulty level (1 is easiest, linear scale): {state.difficulty}
                     Branching mode: {mode}
 
                     Rules:
                     - Do NOT repeat previous questions.
                     - Be concise.
                     - Stay natural and conversational.
+                    - Do not penalize hindi/hinglish usage.
 
                     Branching behavior:
                     - clarify_mistake → Ask the candidate to correct or reconsider their answer.
