@@ -20,6 +20,7 @@ class AnswerEvaluator:
                         Return ONLY valid JSON.
                         Do NOT include any text before or after the JSON.
                         Do NOT explain anything.
+                        Be lenient in checking as this is targeted for freshers.
                         Return strictly:
                             {{
                                 "score": float between 0 and 1,

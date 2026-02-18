@@ -47,7 +47,7 @@ if __name__ == "__main__":
     stt = WhisperSTT()
     llm = GeminiLLM()
     evaluator = AnswerEvaluator()
-    state = InterviewState(topic="SDE Intern Interview")
+    state = InterviewState(topic="CyberSecurity Intern Interview")
 
     # tts = create_tts(
     #     engine="piper",
@@ -227,7 +227,7 @@ if __name__ == "__main__":
 
     smart_turn_probs = deque(maxlen=5)
     SMART_TURN_THRESHOLD = 0.75
-    REQUIRED_HISTORY = 3
+    REQUIRED_HISTORY = 5
 
     pending_turn = {
         "active": False,
@@ -236,6 +236,10 @@ if __name__ == "__main__":
     }
 
     CONFIRM_WINDOW = 0.5 # 500ms
+
+    FAILSAFE_SILENCE_SECONDS = 3
+    FRAME_DURATION_SEC = 0.032
+    FAILSAFE_SILENCE_FRAMES = int(FAILSAFE_SILENCE_SECONDS / FRAME_DURATION_SEC)
 
 
     def on_audio_frame(frame: np.ndarray):
@@ -249,6 +253,32 @@ if __name__ == "__main__":
             buffer.add_speech_frame(frame)
         else:
             buffer.add_silence_frame(frame)
+
+        # -------------------------------------------------
+        # Hard silence failsafe (4s silence → force commit)
+        # -------------------------------------------------
+
+        if (
+            buffer.speech_samples >= buffer.min_speech_samples
+            and buffer._silent_frames >= FAILSAFE_SILENCE_FRAMES
+            and not pending_turn["active"]
+        ):
+            print("⏱ Failsafe triggered (4s silence). Forcing commit.")
+
+            raw_audio = buffer.get_full_turn_audio()
+
+            def rms(audio: np.ndarray) -> float:
+                return np.sqrt(np.mean(audio ** 2))
+
+            if rms(raw_audio) >= RMS_SILENCE_THRESHOLD:
+                print(f"Turn duration: {len(raw_audio)/16000:.2f} sec")
+                turn_queue.put(raw_audio)
+
+            buffer.reset()
+            smart_turn_probs.clear()
+            pending_turn["active"] = False
+            return
+
 
         if buffer.should_check_turn():
             audio_8s = buffer.get_audio_for_smart_turn()
@@ -314,6 +344,12 @@ if __name__ == "__main__":
     # --------------------------------------------------------------
 
     mic.start(on_audio_frame)
+
+    
+    # --- Add your welcome TTS here ---
+    welcome_message = f"Welcome to your {state.topic}. Let's start off with a brief introduction about yourself."
+    tts_busy.set()
+    tts.speak(welcome_message)
 
     try:
         while True:

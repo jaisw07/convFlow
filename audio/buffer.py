@@ -23,6 +23,7 @@ class TurnBuffer:
         self.sample_rate = sample_rate
         self.max_samples = int(sample_rate * max_turn_seconds)
         self.min_speech_samples = int(sample_rate * min_speech_seconds)
+        self.speech_samples = 0
 
         self.silence_trigger_frames = int(
             silence_trigger_ms / frame_duration_ms
@@ -44,6 +45,8 @@ class TurnBuffer:
     def add_speech_frame(self, frame: np.ndarray) -> None:
         self.frames.append(frame)
         self.total_samples += len(frame)
+
+        self.speech_samples += len(frame)
 
         self.smart_turn_frames.append(frame)
         self.smart_turn_samples += len(frame)
@@ -70,7 +73,7 @@ class TurnBuffer:
         if not self._has_speech:
             return False
 
-        if self.total_samples < self.min_speech_samples:
+        if self.speech_samples < self.min_speech_samples:
             return False
 
         return self._silent_frames >= self.silence_trigger_frames
@@ -104,6 +107,7 @@ class TurnBuffer:
 
         self.total_samples = 0
         self.smart_turn_samples = 0
+        self.speech_samples = 0
 
         self._silent_frames = 0
         self._has_speech = False
