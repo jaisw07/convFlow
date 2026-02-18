@@ -19,8 +19,6 @@ from stt.whisper_stt import WhisperSTT
 from llm.llm import GeminiLLM
 from audio.tts.factory import create_tts
 
-import orchestrator_helper
-
 from state.state import InterviewState
 from state.evaluator import AnswerEvaluator
 
@@ -54,7 +52,7 @@ if __name__ == "__main__":
     stt = WhisperSTT()
     llm = GeminiLLM()
     evaluator = AnswerEvaluator()
-    state = InterviewState(topic="Fresher SDE Internship Interview")
+    state = InterviewState(topic="SDE Intern Interview")
 
     # tts = create_tts(
     #     engine="piper",
@@ -170,14 +168,23 @@ if __name__ == "__main__":
                     Current difficulty level: {state.difficulty}
                     Average score so far: {state.average_score():.2f}
 
+                    Previously asked questions:
+                    {[turn["question"] for turn in state.history]}
+
                     Last evaluation:
                     Score: {eval_result.get("score")}
                     Depth: {eval_result.get("depth")}
                     Feedback: {eval_result.get("feedback")}
 
-                    Based on the candidate's performance, ask the next best interview question.
+                    Rules:
+                    - Do NOT repeat any previously asked question.
+                    - Do NOT rephrase the same question.
+                    - Move forward in the interview.
+
+                    Ask the next best interview question.
                     Keep it concise.
                 """
+
 
                 response = llm.generate(
                     user_text=adaptive_prompt,
@@ -227,7 +234,7 @@ if __name__ == "__main__":
         "audio": None
     }
 
-    CONFIRM_WINDOW = 0.25  # 250ms
+    CONFIRM_WINDOW = 0.5  # 500ms
 
 
     def on_audio_frame(frame: np.ndarray):

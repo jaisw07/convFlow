@@ -101,6 +101,8 @@ class GeminiLLM:
             "Your tone is calm, neutral, and encouraging.\n"
             "Avoid long monologues unless explicitly asked.\n"
             "If an answer is unclear, ask a brief follow-up question.\n"
+            "Do not ask basic definition questions repeatedly."
+            "Escalate depth or switch topic instead."
             "Return your answer in plain text without using any markup.\n"
             "Stick to English strictly even if the user responds in Hinglish or Hindi. You understand all languages but speak only in English. The user has full freedom to converse in Hindi, Hinglish or English only.\n"
         )
