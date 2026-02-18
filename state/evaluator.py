@@ -16,6 +16,7 @@ class AnswerEvaluator:
     def evaluate(self, question: str, answer: str) -> dict:
         prompt = f"""
             You are a strict but fair technical interview evaluator for fresher candidates.
+            Do not penalize hindi/hinglish usage.
 
             Question:
             {question}

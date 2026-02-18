@@ -192,7 +192,7 @@ if __name__ == "__main__":
 
                 followup_instruction = ""
                 if mode == "use_followup" and state.followup_stack:
-                    followup = state.followup_stack.pop(0)
+                    followup = state.followup_stack.pop(-1)
                     followup_instruction = f"Ask this follow-up question: {followup}"
 
                 # 4️⃣ Now build prompt
@@ -206,7 +206,6 @@ if __name__ == "__main__":
                     - Do NOT repeat previous questions.
                     - Be concise.
                     - Stay natural and conversational.
-                    - Do not penalize hindi/hinglish usage.
 
                     Branching behavior:
                     - clarify_mistake → Ask the candidate to correct or reconsider their answer.
