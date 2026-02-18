@@ -39,45 +39,88 @@ class WhisperSTT:
 
     @torch.inference_mode()
     def transcribe(self, audio: np.ndarray) -> str:
-        """
-        Transcribe a single completed user turn.
-
-        Args:
-            audio:
-                - np.ndarray
-                - float32
-                - mono
-                - 16kHz
-        """
-
         if audio.dtype != np.float32:
             raise ValueError("WhisperSTT expects float32 audio")
 
         if audio.ndim != 1:
             raise ValueError("WhisperSTT expects mono (1D) audio")
 
-        # Feature extraction
+        total_seconds = len(audio) / SAMPLE_RATE
+        print(f"Input audio seconds: {total_seconds:.2f}")
+
+        # --- If short enough, do single pass ---
+        if total_seconds <= 28:
+            return self._transcribe_chunk(audio)
+
+        # --- Chunking mode ---
+        chunk_size_sec = 25
+        overlap_sec = 2
+
+        chunk_size = chunk_size_sec * SAMPLE_RATE
+        overlap = overlap_sec * SAMPLE_RATE
+
+        transcripts = []
+        start = 0
+
+        while start < len(audio):
+            end = min(start + chunk_size, len(audio))
+            chunk = audio[start:end]
+
+            print(f"Transcribing chunk {start/SAMPLE_RATE:.2f}s → {end/SAMPLE_RATE:.2f}s")
+
+            text = self._transcribe_chunk(chunk)
+            transcripts.append(text)
+
+            if end == len(audio):
+                break
+
+            start = end - overlap
+
+        return self._stitch_transcripts(transcripts)
+    
+    def _transcribe_chunk(self, audio_chunk: np.ndarray) -> str:
         inputs = self.processor(
-            audio,
+            audio_chunk,
             sampling_rate=SAMPLE_RATE,
             return_tensors="pt",
         )
 
         input_features = inputs.input_features.to(self.device, dtype=self.dtype)
 
-        # Generate tokens
         generated_ids = self.model.generate(
             input_features,
             task="transcribe",
-            language="en",     # Hinglish works best with "en"
+            language="en",
         )
 
-        # Decode tokens → text
         text = self.processor.batch_decode(
             generated_ids, skip_special_tokens=True
         )[0]
 
         return text.strip()
+
+    def _stitch_transcripts(self, chunks):
+        if not chunks:
+            return ""
+
+        final_text = chunks[0]
+
+        for next_chunk in chunks[1:]:
+            final_text = self._merge_overlap(final_text, next_chunk)
+
+        return final_text.strip()
+
+    def _merge_overlap(self, prev_text, next_text):
+        prev_words = prev_text.split()
+        next_words = next_text.split()
+
+        max_overlap = min(len(prev_words), len(next_words), 30)
+
+        for i in range(max_overlap, 0, -1):
+            if prev_words[-i:] == next_words[:i]:
+                return " ".join(prev_words + next_words[i:])
+
+        return prev_text + " " + next_text
 
 
 # ------------------------------------------------------------------

@@ -284,6 +284,7 @@ if __name__ == "__main__":
                             buffer.reset()
                         else:
                             print("✅ Turn confirmed. Processing...\n")
+                            print(f"Turn duration: {len(raw_audio)/16000:.2f} sec")
                             turn_queue.put(raw_audio)
                             buffer.reset()
 
