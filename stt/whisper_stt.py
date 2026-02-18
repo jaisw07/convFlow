@@ -18,9 +18,9 @@ class WhisperSTT:
         model_id: str = "Oriserve/Whisper-Hindi2Hinglish-Apex",
     ):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        # self.dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        self.dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         
-        self.dtype = torch.float32
+        # self.dtype = torch.float32
 
         print(f"[WhisperSTT] Loading model on {self.device}...")
 

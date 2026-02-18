@@ -35,11 +35,6 @@ RMS_SILENCE_THRESHOLD = 0.005
 # ------------------------------------------------------------------
 
 if __name__ == "__main__":
-
-    print("🎤 Speak into the microphone.")
-    print("Mic → Smart Turn → Whisper → Gemini → Piper TTS")
-    print("Press Ctrl+C to stop.\n")
-
     # --------------------------------------------------------------
     # Initialize components
     # --------------------------------------------------------------
@@ -228,13 +223,19 @@ if __name__ == "__main__":
     # --------------------------------------------------------------
     # Audio callback
     # --------------------------------------------------------------
+    from collections import deque
+
+    smart_turn_probs = deque(maxlen=5)
+    SMART_TURN_THRESHOLD = 0.75
+    REQUIRED_HISTORY = 3
+
     pending_turn = {
         "active": False,
         "timestamp": 0.0,
         "audio": None
     }
 
-    CONFIRM_WINDOW = 0.5  # 500ms
+    CONFIRM_WINDOW = 0.5 # 500ms
 
 
     def on_audio_frame(frame: np.ndarray):
@@ -251,13 +252,21 @@ if __name__ == "__main__":
 
         if buffer.should_check_turn():
             audio_8s = buffer.get_audio_for_smart_turn()
-            complete, prob = smart_turn.is_end_of_turn(audio_8s)
+            _, prob = smart_turn.is_end_of_turn(audio_8s)
+
+            smart_turn_probs.append(prob)
+            avg_prob = sum(smart_turn_probs) / len(smart_turn_probs)
 
             print("🧠 Smart Turn check:")
-            print(f"   Complete: {complete}")
-            print(f"   Probability: {prob:.4f}")
+            print(f"   Instant Prob: {prob:.4f}")
+            print(f"   Avg Prob: {avg_prob:.4f}")
 
-            if complete and not pending_turn["active"]:
+
+            if (
+                len(smart_turn_probs) == REQUIRED_HISTORY
+                and avg_prob >= SMART_TURN_THRESHOLD
+                and not pending_turn["active"]
+            ):
                 print("🟡 SmartTurn suggests turn end. Awaiting confirmation...")
                 pending_turn["active"] = True
                 pending_turn["timestamp"] = time.time()
@@ -273,7 +282,10 @@ if __name__ == "__main__":
 
                 if elapsed >= CONFIRM_WINDOW:
                     # If still silent → commit
-                    if buffer._silent_frames >= buffer.silence_trigger_frames:
+                    if (
+                        buffer._silent_frames >= buffer.silence_trigger_frames
+                        and avg_prob >= SMART_TURN_THRESHOLD
+                        ):
                         raw_audio = pending_turn["audio"]
 
                         def rms(audio: np.ndarray) -> float:
@@ -285,13 +297,15 @@ if __name__ == "__main__":
                         else:
                             print("✅ Turn confirmed. Processing...\n")
                             print(f"Turn duration: {len(raw_audio)/16000:.2f} sec")
-                            turn_queue.put(raw_audio)
+                            turn_queue.put(raw_audio) 
                             buffer.reset()
 
                     else:
                         print("⚠️ Speech resumed. Cancelling turn.\n")
+                        smart_turn_probs.clear()
 
                     pending_turn["active"] = False
+                    smart_turn_probs.clear()
 
 
 
