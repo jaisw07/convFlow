@@ -32,8 +32,10 @@ class AnswerEvaluator:
                     "correctness": integer 0-10,
                     "clarity": integer 0-10,
                     "confidence": integer 0-10,
+                    "relevance": integer 0-10,
+                    "behavior": "normal" | "irrelevant" | "restart_attempt" | "erratic" | "abusive",
                     "red_flags": list of short strings,
-                    "followup_opportunities": list of short technical follow-up prompts
+                    "followup_opportunities": list of short technical follow-up prompts (do not give empty placeholders )
             }}
             """
 
@@ -63,5 +65,7 @@ class AnswerEvaluator:
             "clarity": 5,
             "confidence": 5,
             "red_flags": [],
+            "relevance": 5,
+            "behavior": "normal",
             "followup_opportunities": []
         }

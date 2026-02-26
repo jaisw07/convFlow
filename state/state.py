@@ -1,5 +1,32 @@
 from typing import List, Dict, Optional
+from enum import Enum
 
+class CandidateProfile:
+    def __init__(self):
+        self.name = ""
+        self.skills = []
+        self.projects = []
+        self.experience = []
+        self.missing_fields = []
+
+    def update_missing_fields(self):
+        missing = []
+        if not self.name:
+            missing.append("name")
+        if not self.skills:
+            missing.append("skills")
+        if not self.projects:
+            missing.append("projects")
+        if not self.experience:
+            missing.append("experience")
+
+        self.missing_fields = missing
+
+class InterviewPhase(Enum):
+    INTRO = "introduction"
+    TECHNICAL = "technical"
+    BEHAVIORAL = "behavioral"
+    CLOSING = "closing"
 
 class InterviewState:
     def __init__(self, topic: str = "General Technical Interview"):
@@ -11,16 +38,35 @@ class InterviewState:
         self.history: List[Dict] = []
         self.last_evaluation = None
         self.followup_stack: List[str] = []
+        self.phase = InterviewPhase.INTRO
+        self.profile = CandidateProfile()
+        self.summary = ""
+        self.anomaly_flags = {}
+        self.profile.update_missing_fields()
+        self.phase_turn_count = 0
 
+    def update_phase(self):
+        if self.phase == InterviewPhase.INTRO:
+            if not self.profile.missing_fields:
+                self.phase = InterviewPhase.TECHNICAL
+                self.phase_turn_count = 0
+
+        elif self.phase == InterviewPhase.TECHNICAL:
+            if self.phase_turn_count >= 4:
+                self.phase = InterviewPhase.BEHAVIORAL
+                self.phase_turn_count = 0
+
+        elif self.phase == InterviewPhase.BEHAVIORAL:
+            if self.phase_turn_count >= 3:
+                self.phase = InterviewPhase.CLOSING
+                self.phase_turn_count = 0
 
     def record_turn(self, question: str, answer: str, evaluation: Dict):
         self.turn_count += 1
+        self.phase_turn_count += 1
         self.current_question = question
 
         self.last_evaluation = evaluation
-
-        score = evaluation.get("score", 0.0)
-        self.score_history.append(score)
 
         # Compute composite score
         correctness = evaluation.get("correctness", 5)

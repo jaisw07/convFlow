@@ -20,16 +20,41 @@ from llm.llm import GeminiLLM
 from audio.tts.factory import create_tts
 
 from state.state import InterviewState
+from state.state import InterviewPhase
 from state.evaluator import AnswerEvaluator
-
+from state.profile_updater import ProfileUpdater
 
 # ------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------
+class TranscriptManager:
+    def __init__(self):
+        self.turns = []
+
+    def add_turn(self, role, content):
+        self.turns.append({"role": role, "content": content})
+
+    def last_n(self, n=4):
+        return self.turns[-n:]
+
+    def full_text(self):
+        return "\n".join([f"{t['role']}: {t['content']}" for t in self.turns])
 
 RMS_SILENCE_THRESHOLD = 0.005
 
+def summarize_transcript(llm, transcript_text):
+    prompt = f"""
+    Summarize the following interview in under 200 words.
+    Focus on:
+    - Candidate strengths
+    - Technical signals
+    - Gaps
+    - Behavioral signals
 
+    Transcript:
+    {transcript_text}
+    """
+    return llm.generate(user_text=prompt)
 # ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
@@ -43,6 +68,8 @@ if __name__ == "__main__":
     vad = SileroVAD()
     buffer = TurnBuffer()
     smart_turn = SmartTurnV3()
+    transcript_manager = TranscriptManager()
+    profile_updater = ProfileUpdater()
 
     stt = WhisperSTT()
     llm = GeminiLLM()
@@ -84,7 +111,6 @@ if __name__ == "__main__":
     turn_queue = queue.Queue()
 
     # Conversation memory
-    conversation_history = []
     
     # check valid transcript or not
     def is_valid_transcript(text: str) -> bool:
@@ -142,7 +168,6 @@ if __name__ == "__main__":
             try:
                 # ------------------ STT ------------------
                 transcript = stt.transcribe(audio)
-
                 if not is_valid_transcript(transcript):
                     print("⚠️ Invalid transcript detected.\n")
                     clarifications = [
@@ -155,6 +180,29 @@ if __name__ == "__main__":
                     tts_busy.set()
                     tts.speak(choice)
                     continue
+
+                if state.phase == InterviewPhase.INTRO:
+                    updates = profile_updater.extract_updates(
+                    transcript,
+                        {
+                            "name": state.profile.name,
+                            "skills": state.profile.skills,
+                            "projects": state.profile.projects,
+                            "experience": state.profile.experience
+                        }
+                    )
+                    
+                    if updates.get("name"):
+                        state.profile.name = updates["name"]
+                    
+                    state.profile.skills.extend(updates.get("skills", []))
+                    state.profile.projects.extend(updates.get("projects", []))
+                    state.profile.experience.extend(updates.get("experience", []))
+
+                    state.profile.update_missing_fields()
+
+                
+                transcript_manager.add_turn("user", transcript)
 
                 print(f"📝 You said:\n{transcript}\n")
                 # ------------------ EVALUATION ------------------
@@ -176,7 +224,9 @@ if __name__ == "__main__":
                     )
 
                 print(f"📊 Evaluation: {eval_result}\n")
-
+                behavior = eval_result.get("behavior", "normal")
+                relevance = eval_result.get("relevance", 5)
+                
                 # 1️⃣ Record turn FIRST
                 state.record_turn(
                     question=state.current_question or "Opening Question",
@@ -193,19 +243,58 @@ if __name__ == "__main__":
                 followup_instruction = ""
                 if mode == "use_followup" and state.followup_stack:
                     followup = state.followup_stack.pop(-1)
-                    followup_instruction = f"Ask this follow-up question: {followup}"
+                    followup_instruction = f"Ask this follow-up question: {followup}. Set it up nicely for the interviewee by reiterating information to give context around it. It should not seem abrupt."
+                
+                if behavior == "abusive":
+                    response = "Let's maintain professionalism. Please answer the question."
+                    tts_busy.set()
+                    tts.speak(response)
+                    continue
+                
+                if behavior == "restart_attempt":
+                    response = "We've already covered that earlier. Let's continue from where we left off."
+                    tts_busy.set()
+                    tts.speak(response)
+                    continue
+
+                if behavior == "irrelevant":
+                    response = "Let's stay focused on the question. Could you address it directly?"
+                    tts_busy.set()
+                    tts.speak(response)
+                    continue
+                
+                state.update_phase()
 
                 # 4️⃣ Now build prompt
                 adaptive_prompt = f"""
                     You are conducting a {state.topic}.
+                    Current Phase: {state.phase.value}.
+
+                    Phase rules:
+                    INTRO → Gather name, skills, projects, experience.
+                    TECHNICAL → Deep technical questions.
+                    BEHAVIORAL → Situational + teamwork.
+                    CLOSING → Wrap up.
+                    You are a no-nonsense interviewer who is concerned about finding the highest quality candidate for the role. Do not coddle or appreciate unnecessarily.
 
                     Current difficulty level (1 is easiest, linear scale): {state.difficulty}
                     Branching mode: {mode}
 
+                    Behavior classification: {behavior}
+                    Relevance score: {relevance}
+                    Current Phase: {state.phase.value}
+                    Interview Summary:
+                    {state.summary}
+
                     Rules:
                     - Do NOT repeat previous questions.
-                    - Be concise.
                     - Stay natural and conversational.
+
+                    Behaviour Managing(prioritize over branching):
+                    - If behavior is irrelevant → politely redirect.
+                    - If restart_attempt → remind candidate we covered that.
+                    - If erratic → stabilize conversation professionally.
+                    - If abusive → warn once.
 
                     Branching behavior:
                     - clarify_mistake → Ask the candidate to correct or reconsider their answer.
@@ -219,9 +308,11 @@ if __name__ == "__main__":
                     Ask the next question.
                 """
 
+                short_memory = transcript_manager.last_n(4)
+
                 response = llm.generate(
                     user_text=adaptive_prompt,
-                    context=conversation_history,
+                    context=short_memory
                 )
 
                 if not response:
@@ -230,7 +321,7 @@ if __name__ == "__main__":
 
                 print(f"🤖 Gemini:\n{response}\n")
 
-
+                transcript_manager.add_turn("assistant", response)
                 state.current_question = response
 
 
@@ -240,12 +331,9 @@ if __name__ == "__main__":
                 tts.speak(response)
 
                 # ------------------ Memory ------------------
-                conversation_history.append(
-                    {"role": "user", "content": transcript}
-                )
-                conversation_history.append(
-                    {"role": "assistant", "content": response}
-                )
+                if state.turn_count % 3 == 0:
+                    new_summary = summarize_transcript(llm, transcript_manager.full_text())
+                    state.summary = new_summary
 
             finally:
                 turn_queue.task_done()
@@ -270,7 +358,7 @@ if __name__ == "__main__":
 
     CONFIRM_WINDOW = 0.5 # 500ms
 
-    FAILSAFE_SILENCE_SECONDS = 3
+    FAILSAFE_SILENCE_SECONDS = 2
     FRAME_DURATION_SEC = 0.032
     FAILSAFE_SILENCE_FRAMES = int(FAILSAFE_SILENCE_SECONDS / FRAME_DURATION_SEC)
 
@@ -288,7 +376,7 @@ if __name__ == "__main__":
             buffer.add_silence_frame(frame)
 
         # -------------------------------------------------
-        # Hard silence failsafe (4s silence → force commit)
+        # Hard silence failsafe (2s silence → force commit)
         # -------------------------------------------------
 
         if (
@@ -296,7 +384,7 @@ if __name__ == "__main__":
             and buffer._silent_frames >= FAILSAFE_SILENCE_FRAMES
             and not pending_turn["active"]
         ):
-            print("⏱ Failsafe triggered (4s silence). Forcing commit.")
+            print("⏱ Failsafe triggered (2s silence). Forcing commit.")
 
             raw_audio = buffer.get_full_turn_audio()
 
