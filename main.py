@@ -1,70 +1,130 @@
-import subprocess
-import tempfile
-import os
-import sounddevice as sd
-import soundfile as sf
+import asyncio
+import numpy as np
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from livekit import rtc
+from livekit.rtc import Room, AudioStream
+from livekit.api import AccessToken, VideoGrants
+from audio.buffer import TurnBuffer
+from audio.vad import SileroVAD
+from stt.whisper_stt import WhisperSTT
+from stt.progressive_stt import ProgressiveSTTController
 
+LIVEKIT_URL = "ws://localhost:7880"
+API_KEY = "devkey"
+API_SECRET = "secret"
 
-# -----------------------------
-# CONFIG — EDIT THESE
-# -----------------------------
+app = FastAPI()
 
-# REF_AUDIO = r"C:\Users\SHREY\Downloads\srk_clean_sample.wav"  # <-- path to your reference audio
-# REF_TEXT = "I'm just going to tell you my life's journey in very simple words, and which may not leave you inspired, but will help you survive this life. And if you can do that, kids, if you can survive, happiness, creativity and success will follow on its own."
-# REF_AUDIO = r"C:\Users\SHREY\Documents\Sound Recordings\tanmay_sample.wav"  # <-- path to your reference audio
-# REF_TEXT = "I'm just going to tell you my life's journey in very simple words, and which may not leave you inspired, but will help you survive this life."
-REF_AUDIO = r"C:\Users\SHREY\Desktop\Standard recording 8.wav"  # <-- path to your reference audio
-REF_TEXT = "My name is Jane Doe and this is the clean recording of my words."
-MODEL_NAME = "F5TTS_v1_Base"
-DEVICE = "cuda"  # change to "cpu" if no GPU
+# -------------------- CORS --------------------
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# -----------------------------
-# MAIN
-# -----------------------------
+# -------------------- Token --------------------
 
-def main():
+def create_token(identity: str, room_name: str):
+    token = AccessToken(API_KEY, API_SECRET)
+    token.with_identity(identity)
+    token.with_grants(VideoGrants(room_join=True, room=room_name))
+    return token.to_jwt()
 
-    if not os.path.exists(REF_AUDIO):
-        print("Reference audio not found:", REF_AUDIO)
-        return
+@app.get("/token")
+def token():
+    return {"token": create_token("browser-user", "test-room")}
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+# -------------------- Progressive STT --------------------
 
-        output_file = "output.wav"
+whisper_stt = WhisperSTT()
+progressive_stt = ProgressiveSTTController(whisper_stt)
 
-        cmd = [
-            "f5-tts_infer-cli",
-            "--model", MODEL_NAME,
-            "--ref_audio", REF_AUDIO,
-            "--ref_text", REF_TEXT,
-            "--gen_text", "Good morning, thanks for coming in today. Could you start by briefly introducing yourself and telling us about your background? We’d also like to understand what interested you in this role and how your previous experience prepares you for this position. Finally, could you describe a challenging project you worked on recently and how you handled any difficulties that came up during it?",
-            "--output_dir", tmpdir,
-            "--output_file", output_file,
-            "--device", DEVICE,
-        ]
+# -------------------- Buffer --------------------
 
-        print("\nRunning F5 CLI...\n")
-        print(" ".join(cmd))
-        print()
+buffer = TurnBuffer(
+    sample_rate=16000,
+    max_turn_seconds=8.0,
+    min_speech_seconds=1.5,
+    silence_trigger_ms=1000,
+    frame_duration_ms=10,
+)
 
-        process = subprocess.Popen(cmd)
-        process.wait()
+# ------------------- VAD ---------------------
 
-        wav_path = os.path.join(tmpdir, output_file)
+vad = SileroVAD()
 
-        if not os.path.exists(wav_path):
-            print("\n❌ Output file not found.")
-            return
+# vad expects 32ms frames but buffer collects 10ms frames -> rolling buffer added which collects till 32ms frames
+vad_buffer = np.zeros(0, dtype=np.float32)
+VAD_WINDOW_SAMPLES = int(16000 * 0.032)  # 32ms = 512 samples
 
-        print("\n✅ Generation complete. Playing audio...\n")
+# -------------------- Downsample Audio --------------------
 
-        audio, sr = sf.read(wav_path, dtype="float32")
-        sd.play(audio, sr)
-        sd.wait()
+def downsample_48k_to_16k(pcm_int16: np.ndarray) -> np.ndarray:
+    # Convert to float32 in range [-1, 1]
+    audio = pcm_int16.astype(np.float32) / 32768.0
+    
+    # Downsample by factor of 3 (48k → 16k)
+    return audio[::3] 
 
-        print("\nDone.")
+# -------------------- LiveKit Agent --------------------
 
+room = Room()
 
-if __name__ == "__main__":
-    main()
+@app.on_event("startup")
+async def startup():
+    print("Starting LiveKit agent...")
+
+    @room.on("track_subscribed")
+    def on_track_subscribed(track, publication, participant):
+        print(f"Subscribed to {participant.identity}")
+
+        if track.kind == rtc.TrackKind.KIND_AUDIO:
+            asyncio.create_task(handle_audio(track))
+
+    await room.connect(
+        LIVEKIT_URL,
+        create_token("agent", "test-room")
+    )
+
+    print("Agent connected to room.")
+
+async def handle_audio(track: rtc.RemoteAudioTrack):
+    global vad_buffer
+
+    stream = AudioStream(track)
+
+    async for event in stream:
+        frame = event.frame
+
+        pcm_int16 = np.frombuffer(frame.data, dtype=np.int16)
+        pcm_16k = downsample_48k_to_16k(pcm_int16)
+
+        # ---- Accumulate until 32ms ----
+        vad_buffer = np.concatenate([vad_buffer, pcm_16k])
+
+        if len(vad_buffer) >= VAD_WINDOW_SAMPLES:
+            vad_chunk = vad_buffer[:VAD_WINDOW_SAMPLES]
+            vad_buffer = vad_buffer[VAD_WINDOW_SAMPLES:]
+
+            is_speaking = vad.process_frame(vad_chunk)
+
+            if is_speaking:
+                buffer.add_speech_frame(vad_chunk)
+            else:
+                buffer.add_silence_frame(vad_chunk)
+
+            asyncio.create_task(progressive_stt.maybe_process(buffer))
+
+            if buffer.should_check_turn():
+                print("🟢 Turn detected. Finalizing transcription...")
+                transcript = await progressive_stt.finalize(buffer)
+
+                print("\n📝 Final Transcript:")
+                print(transcript)
+                print("--------------------------------------------------\n")
+
+                buffer.reset()

@@ -91,6 +91,21 @@ class TurnBuffer:
             audio = np.concatenate([pad, audio])
 
         return audio.astype(np.float32)
+    
+    def get_audio_from(self, start_sample: int) -> np.ndarray:
+        """
+        Return audio starting from a specific sample index.
+        Avoids repeated full concatenation externally.
+        """
+        if not self.frames:
+            return np.zeros(0, dtype=np.float32)
+
+        full_audio = np.concatenate(list(self.frames)).astype(np.float32)
+
+        if start_sample >= len(full_audio):
+            return np.zeros(0, dtype=np.float32)
+
+        return full_audio[start_sample:]
 
     def get_full_turn_audio(self) -> np.ndarray:
         """Return full turn audio for STT."""

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>LiveKit Interview Test</title>
+</head>
+
+<body>
+    <h2>LiveKit Interview Test</h2>
+    <button onclick="connectRoom()">Connect</button>
+
+    <script type="module">
+        import { Room } from "https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.esm.mjs";
+
+        async function fetchToken() {
+            const res = await fetch("http://localhost:8000/token");
+            const data = await res.json();
+            return data.token;
+        }
+
+        window.connectRoom = async function () {
+            const token = await fetchToken();
+
+            const room = new Room();
+
+            await room.connect("ws://localhost:7880", token);
+
+            await room.localParticipant.enableCameraAndMicrophone();
+
+            console.log("Connected to LiveKit room.");
+        }
+    </script>
+</body>
+
+</html>

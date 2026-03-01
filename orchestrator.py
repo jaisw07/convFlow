@@ -16,13 +16,11 @@ from audio.vad import SileroVAD
 from audio.buffer import TurnBuffer
 from turn_taking.smart_turn import SmartTurnV3
 from stt.whisper_stt import WhisperSTT
-from llm.llm import GeminiLLM
 from audio.tts.factory import create_tts
 
 from state.state import InterviewState
 from state.state import InterviewPhase
-from state.evaluator import AnswerEvaluator
-from state.profile_updater import ProfileUpdater
+from stt.progressive_stt import ProgressiveSTTController
 
 # ------------------------------------------------------------------
 # Configuration
@@ -69,6 +67,7 @@ if __name__ == "__main__":
     buffer = TurnBuffer()
     smart_turn = SmartTurnV3()
     transcript_manager = TranscriptManager()
+    progressive_stt = ProgressiveSTTController(stt)
     profile_updater = ProfileUpdater()
 
     stt = WhisperSTT()
@@ -159,7 +158,7 @@ if __name__ == "__main__":
     # Worker: STT → LLM → TTS
     # --------------------------------------------------------------
 
-    def turn_worker():
+    async def turn_worker():
         while True:
             audio = turn_queue.get()
             if audio is None:
@@ -167,7 +166,8 @@ if __name__ == "__main__":
 
             try:
                 # ------------------ STT ------------------
-                transcript = stt.transcribe(audio)
+                
+                transcript = await progressive_stt.finalize(audio)
                 if not is_valid_transcript(transcript):
                     print("⚠️ Invalid transcript detected.\n")
                     clarifications = [
@@ -363,7 +363,7 @@ if __name__ == "__main__":
     FAILSAFE_SILENCE_FRAMES = int(FAILSAFE_SILENCE_SECONDS / FRAME_DURATION_SEC)
 
 
-    def on_audio_frame(frame: np.ndarray):
+    async def on_audio_frame(frame: np.ndarray):
         # ignore mic while tts speaking
         if tts_busy.is_set():
             return
@@ -375,6 +375,8 @@ if __name__ == "__main__":
         else:
             buffer.add_silence_frame(frame)
 
+        await progressive_stt.maybe_process(buffer.get_full_turn_audio())
+
         # -------------------------------------------------
         # Hard silence failsafe (2s silence → force commit)
         # -------------------------------------------------
@@ -382,7 +384,7 @@ if __name__ == "__main__":
         if (
             buffer.speech_samples >= buffer.min_speech_samples
             and buffer._silent_frames >= FAILSAFE_SILENCE_FRAMES
-            and not pending_turn["active"]
+            and not pending_turn["active"]  
         ):
             print("⏱ Failsafe triggered (2s silence). Forcing commit.")
 
