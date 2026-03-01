@@ -9,12 +9,32 @@ from audio.buffer import TurnBuffer
 from audio.vad import SileroVAD
 from stt.whisper_stt import WhisperSTT
 from stt.progressive_stt import ProgressiveSTTController
+from llm.streaming_llm import StreamingInterviewLLM
+from llm.streaming_voice_agent import StreamingVoiceAgent
+from audio.tts.factory import create_tts
 
 LIVEKIT_URL = "ws://localhost:7880"
 API_KEY = "devkey"
 API_SECRET = "secret"
 
 app = FastAPI()
+
+# -------------------- TTS --------------------
+
+tts = create_tts(
+    engine="kokoro",
+    lang_code="a",
+    voice="af_heart",
+    speed=1.0,
+)
+
+tts_busy = False
+tts_lock = asyncio.Lock()
+
+# -------------------- LLM and Voice Agent --------------------
+
+llm = StreamingInterviewLLM()
+voice_agent = StreamingVoiceAgent(llm, tts)
 
 # -------------------- CORS --------------------
 
@@ -80,6 +100,8 @@ async def startup():
 
     @room.on("track_subscribed")
     def on_track_subscribed(track, publication, participant):
+        if track.kind != rtc.TrackKind.KIND_AUDIO:
+            return
         print(f"Subscribed to {participant.identity}")
 
         if track.kind == rtc.TrackKind.KIND_AUDIO:
@@ -93,11 +115,14 @@ async def startup():
     print("Agent connected to room.")
 
 async def handle_audio(track: rtc.RemoteAudioTrack):
-    global vad_buffer
-
+    global vad_buffer, tts_busy
     stream = AudioStream(track)
 
     async for event in stream:
+       
+        if tts_busy:
+            continue
+        
         frame = event.frame
 
         pcm_int16 = np.frombuffer(frame.data, dtype=np.int16)
@@ -123,8 +148,15 @@ async def handle_audio(track: rtc.RemoteAudioTrack):
                 print("🟢 Turn detected. Finalizing transcription...")
                 transcript = await progressive_stt.finalize(buffer)
 
-                print("\n📝 Final Transcript:")
-                print(transcript)
-                print("--------------------------------------------------\n")
+                print(f"\n📝 Final Transcript:\n {transcript}")
+                # Reset buffers before speaking
+                vad_buffer = np.zeros(0, dtype=np.float32)
+                buffer.reset()
+                progressive_stt.reset()
+
+                async with tts_lock:
+                    tts_busy = True
+                    await voice_agent.handle_turn(transcript)
+                    tts_busy = False
 
                 buffer.reset()
