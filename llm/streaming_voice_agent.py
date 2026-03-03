@@ -1,6 +1,8 @@
 import asyncio
 import re
 from typing import AsyncGenerator
+import numpy as np
+from livekit import rtc
 
 
 class SentenceChunker:
@@ -48,9 +50,10 @@ class SentenceChunker:
         return leftover
     
 class StreamingVoiceAgent:
-    def __init__(self, llm, tts):
+    def __init__(self, llm, tts, audio_source):
         self.llm = llm
         self.tts = tts
+        self.audio_source = audio_source
 
         self.tts_queue = asyncio.Queue()
 
@@ -58,17 +61,11 @@ class StreamingVoiceAgent:
         while True:
             chunk = await self.tts_queue.get()
             if chunk is None:
+                self.tts_queue.task_done()
                 break
 
-            done_event = asyncio.Event()
-
-            def on_done():
-                done_event.set()
-
-            self.tts.on_done = on_done
-            self.tts.speak(chunk)
-
-            await done_event.wait()
+            for audio_chunk in self.tts.synthesize(chunk):
+                await self.publish_audio(audio_chunk)
             self.tts_queue.task_done()
 
     async def handle_turn(self, prompt: str):
@@ -88,3 +85,32 @@ class StreamingVoiceAgent:
 
         await self.tts_queue.put(None)
         await tts_task
+
+    # --------- HELPER ------------
+
+    async def publish_audio(self, audio_chunk):
+        # Resample 24kHz → 48kHz (simple upsample)
+        audio_48k = np.repeat(audio_chunk, 2)
+
+        # Convert float32 [-1,1] → int16 PCM
+        audio_int16 = np.clip(audio_48k, -1.0, 1.0)
+        audio_int16 = (audio_int16 * 32767).astype(np.int16)
+
+        frame_size = 480  # 10ms @ 48kHz
+
+        total_samples = len(audio_int16)
+
+        for start in range(0, total_samples, frame_size):
+            chunk = audio_int16[start:start + frame_size]
+
+            if len(chunk) < frame_size:
+                chunk = np.pad(chunk, (0, frame_size - len(chunk)))
+
+            audio_frame = rtc.AudioFrame(
+                data=chunk.tobytes(),
+                sample_rate=48000,
+                num_channels=1,
+                samples_per_channel=frame_size,
+            )
+
+            await self.audio_source.capture_frame(audio_frame)

@@ -8,27 +8,34 @@
 <body>
     <h2>LiveKit Interview Test</h2>
     <button onclick="connectRoom()">Connect</button>
-
     <script type="module">
         import { Room } from "https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.esm.mjs";
 
         async function fetchToken() {
             const res = await fetch("http://localhost:8000/token");
             const data = await res.json();
-            return data.token;
+            return data;
         }
 
         window.connectRoom = async function () {
-            const token = await fetchToken();
+            const data = await fetchToken();
 
             const room = new Room();
 
-            await room.connect("ws://localhost:7880", token);
+            room.on("trackSubscribed", (track, publication, participant) => {
+                if (track.kind === "audio") {
+                    console.log("Subscribed to audio track from:", participant.identity);
+                    const audioElement = track.attach();
+                    document.body.appendChild(audioElement);
+                }
+            });
+
+            await room.connect("ws://localhost:7880", data.token);
 
             await room.localParticipant.enableCameraAndMicrophone();
 
-            console.log("Connected to LiveKit room.");
-        }
+            console.log("Connected to LiveKit room:", data.room);
+        };
     </script>
 </body>
 

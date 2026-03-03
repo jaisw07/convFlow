@@ -12,12 +12,21 @@ from stt.progressive_stt import ProgressiveSTTController
 from llm.streaming_llm import StreamingInterviewLLM
 from llm.streaming_voice_agent import StreamingVoiceAgent
 from audio.tts.factory import create_tts
+from uuid import uuid4
 
 LIVEKIT_URL = "ws://localhost:7880"
 API_KEY = "devkey"
 API_SECRET = "secret"
 
 app = FastAPI()
+
+# -------------------- Initialization --------------------
+
+# -------------------- Per Room Arrays --------------------
+rooms = {}
+room_states = {}
+audio_sources = {}
+voice_agents = {}
 
 # -------------------- TTS --------------------
 
@@ -28,13 +37,9 @@ tts = create_tts(
     speed=1.0,
 )
 
-tts_busy = False
-tts_lock = asyncio.Lock()
-
 # -------------------- LLM and Voice Agent --------------------
 
 llm = StreamingInterviewLLM()
-voice_agent = StreamingVoiceAgent(llm, tts)
 
 # -------------------- CORS --------------------
 
@@ -55,23 +60,58 @@ def create_token(identity: str, room_name: str):
     return token.to_jwt()
 
 @app.get("/token")
-def token():
-    return {"token": create_token("browser-user", "test-room")}
+async def token():
+    room_name = f"interview_{uuid4().hex}"
+    identity = "browser-user"
+
+    token = create_token(identity, room_name)
+
+    # Create and connect agent to same room
+    agent_room = Room()
+
+    await agent_room.connect(
+        LIVEKIT_URL,
+        create_token("agent", room_name)
+    )
+
+    room_states[room_name] = {
+        "buffer": TurnBuffer(
+            sample_rate=16000,
+            max_turn_seconds=8.0,
+            min_speech_seconds=1.5,
+            silence_trigger_ms=1000,
+            frame_duration_ms=10,
+        ),
+        "progressive_stt": ProgressiveSTTController(whisper_stt),
+        "vad_buffer": np.zeros(0, dtype=np.float32),
+        "tts_busy": False,
+        "tts_lock": asyncio.Lock(),
+    }
+
+    audio_source = rtc.AudioSource(sample_rate=48000, num_channels=1)
+    voice_agents[room_name] = StreamingVoiceAgent(llm, tts, audio_source)
+    local_track = rtc.LocalAudioTrack.create_audio_track("tts", audio_source)
+
+    await agent_room.local_participant.publish_track(local_track)
+
+    audio_sources[room_name] = audio_source
+
+    @agent_room.on("track_subscribed")
+    def on_track_subscribed(track, publication, participant):
+        if track.kind != rtc.TrackKind.KIND_AUDIO:
+            return
+        asyncio.create_task(handle_audio(track, room_name))
+
+    rooms[room_name] = agent_room
+
+    return {
+        "token": token,
+        "room": room_name,
+    }
 
 # -------------------- Progressive STT --------------------
 
 whisper_stt = WhisperSTT()
-progressive_stt = ProgressiveSTTController(whisper_stt)
-
-# -------------------- Buffer --------------------
-
-buffer = TurnBuffer(
-    sample_rate=16000,
-    max_turn_seconds=8.0,
-    min_speech_seconds=1.5,
-    silence_trigger_ms=1000,
-    frame_duration_ms=10,
-)
 
 # ------------------- VAD ---------------------
 
@@ -91,36 +131,16 @@ def downsample_48k_to_16k(pcm_int16: np.ndarray) -> np.ndarray:
     return audio[::3] 
 
 # -------------------- LiveKit Agent --------------------
-
-room = Room()
-
-@app.on_event("startup")
-async def startup():
-    print("Starting LiveKit agent...")
-
-    @room.on("track_subscribed")
-    def on_track_subscribed(track, publication, participant):
-        if track.kind != rtc.TrackKind.KIND_AUDIO:
-            return
-        print(f"Subscribed to {participant.identity}")
-
-        if track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(handle_audio(track))
-
-    await room.connect(
-        LIVEKIT_URL,
-        create_token("agent", "test-room")
-    )
-
-    print("Agent connected to room.")
-
-async def handle_audio(track: rtc.RemoteAudioTrack):
-    global vad_buffer, tts_busy
+async def handle_audio(track: rtc.RemoteAudioTrack, room_name: str):
+    state = room_states[room_name]
+    voice_agent = voice_agents[room_name]
+    buffer = state["buffer"]
+    progressive_stt = state["progressive_stt"]
     stream = AudioStream(track)
 
     async for event in stream:
        
-        if tts_busy:
+        if state["tts_busy"]:
             continue
         
         frame = event.frame
@@ -129,11 +149,11 @@ async def handle_audio(track: rtc.RemoteAudioTrack):
         pcm_16k = downsample_48k_to_16k(pcm_int16)
 
         # ---- Accumulate until 32ms ----
-        vad_buffer = np.concatenate([vad_buffer, pcm_16k])
+        state["vad_buffer"] = np.concatenate([state["vad_buffer"], pcm_16k])
 
-        if len(vad_buffer) >= VAD_WINDOW_SAMPLES:
-            vad_chunk = vad_buffer[:VAD_WINDOW_SAMPLES]
-            vad_buffer = vad_buffer[VAD_WINDOW_SAMPLES:]
+        if len(state["vad_buffer"]) >= VAD_WINDOW_SAMPLES:
+            vad_chunk = state["vad_buffer"][:VAD_WINDOW_SAMPLES]
+            state["vad_buffer"] = state["vad_buffer"][VAD_WINDOW_SAMPLES:]
 
             is_speaking = vad.process_frame(vad_chunk)
 
@@ -150,13 +170,11 @@ async def handle_audio(track: rtc.RemoteAudioTrack):
 
                 print(f"\n📝 Final Transcript:\n {transcript}")
                 # Reset buffers before speaking
-                vad_buffer = np.zeros(0, dtype=np.float32)
+                state["vad_buffer"] = np.zeros(0, dtype=np.float32)
                 buffer.reset()
                 progressive_stt.reset()
 
-                async with tts_lock:
-                    tts_busy = True
+                async with state["tts_lock"]:
+                    state["tts_busy"] = True
                     await voice_agent.handle_turn(transcript)
-                    tts_busy = False
-
-                buffer.reset()
+                    state["tts_busy"] = False
