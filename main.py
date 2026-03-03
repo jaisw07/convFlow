@@ -27,7 +27,7 @@ rooms = {}
 room_states = {}
 audio_sources = {}
 voice_agents = {}
-
+voice_agents = {}
 # -------------------- TTS --------------------
 
 tts = create_tts(
@@ -165,10 +165,14 @@ async def handle_audio(track: rtc.RemoteAudioTrack, room_name: str):
             asyncio.create_task(progressive_stt.maybe_process(buffer))
 
             if buffer.should_check_turn():
+                turn_start_time = asyncio.get_event_loop().time()
                 print("🟢 Turn detected. Finalizing transcription...")
                 transcript = await progressive_stt.finalize(buffer)
 
                 print(f"\n📝 Final Transcript:\n {transcript}")
+                stt_done_time = asyncio.get_event_loop().time()
+                print(f"⏱ STT Finalize Latency: {stt_done_time - turn_start_time:.3f}s")
+                
                 # Reset buffers before speaking
                 state["vad_buffer"] = np.zeros(0, dtype=np.float32)
                 buffer.reset()
@@ -176,5 +180,5 @@ async def handle_audio(track: rtc.RemoteAudioTrack, room_name: str):
 
                 async with state["tts_lock"]:
                     state["tts_busy"] = True
-                    await voice_agent.handle_turn(transcript)
+                    await voice_agent.handle_turn(transcript, stt_done_time)
                     state["tts_busy"] = False
