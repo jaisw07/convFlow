@@ -13,6 +13,7 @@ from llm.streaming_llm import StreamingInterviewLLM
 from llm.streaming_voice_agent import StreamingVoiceAgent
 from audio.tts.factory import create_tts
 from uuid import uuid4
+from interview.engine import InterviewEngine
 
 LIVEKIT_URL = "ws://localhost:7880"
 API_KEY = "devkey"
@@ -27,7 +28,7 @@ rooms = {}
 room_states = {}
 audio_sources = {}
 voice_agents = {}
-voice_agents = {}
+interview_engines = {}
 # -------------------- TTS --------------------
 
 tts = create_tts(
@@ -40,6 +41,27 @@ tts = create_tts(
 # -------------------- LLM and Voice Agent --------------------
 
 llm = StreamingInterviewLLM()
+
+# -------------------- Progressive STT --------------------
+
+whisper_stt = WhisperSTT()
+
+# ------------------- VAD ---------------------
+
+vad = SileroVAD()
+
+# vad expects 32ms frames but buffer collects 10ms frames -> rolling buffer added which collects till 32ms frames
+vad_buffer = np.zeros(0, dtype=np.float32)
+VAD_WINDOW_SAMPLES = int(16000 * 0.032)  # 32ms = 512 samples
+
+# -------------------- Downsample Audio --------------------
+
+def downsample_48k_to_16k(pcm_int16: np.ndarray) -> np.ndarray:
+    # Convert to float32 in range [-1, 1]
+    audio = pcm_int16.astype(np.float32) / 32768.0
+    
+    # Downsample by factor of 3 (48k → 16k)
+    return audio[::3] 
 
 # -------------------- CORS --------------------
 
@@ -89,7 +111,12 @@ async def token():
     }
 
     audio_source = rtc.AudioSource(sample_rate=48000, num_channels=1)
-    voice_agents[room_name] = StreamingVoiceAgent(llm, tts, audio_source)
+    interview_engines[room_name] = InterviewEngine(llm)
+    voice_agents[room_name] = StreamingVoiceAgent(llm, tts, audio_source, interview_engines[room_name])
+    async def start_interview():
+        await asyncio.sleep(1)
+        await voice_agents[room_name].handle_turn("", asyncio.get_event_loop().time())
+    asyncio.create_task(start_interview())
     local_track = rtc.LocalAudioTrack.create_audio_track("tts", audio_source)
 
     await agent_room.local_participant.publish_track(local_track)
@@ -102,33 +129,20 @@ async def token():
             return
         asyncio.create_task(handle_audio(track, room_name))
 
-    rooms[room_name] = agent_room
+    @agent_room.on("disconnected")
+    def on_disconnect():
+        print(f"🧹 Cleaning up room {room_name}")
+        rooms.pop(room_name, None)
+        room_states.pop(room_name, None)
+        voice_agents.pop(room_name, None)
+        interview_engines.pop(room_name, None)
+        audio_sources.pop(room_name, None)
+        rooms[room_name] = agent_room
 
     return {
         "token": token,
         "room": room_name,
     }
-
-# -------------------- Progressive STT --------------------
-
-whisper_stt = WhisperSTT()
-
-# ------------------- VAD ---------------------
-
-vad = SileroVAD()
-
-# vad expects 32ms frames but buffer collects 10ms frames -> rolling buffer added which collects till 32ms frames
-vad_buffer = np.zeros(0, dtype=np.float32)
-VAD_WINDOW_SAMPLES = int(16000 * 0.032)  # 32ms = 512 samples
-
-# -------------------- Downsample Audio --------------------
-
-def downsample_48k_to_16k(pcm_int16: np.ndarray) -> np.ndarray:
-    # Convert to float32 in range [-1, 1]
-    audio = pcm_int16.astype(np.float32) / 32768.0
-    
-    # Downsample by factor of 3 (48k → 16k)
-    return audio[::3] 
 
 # -------------------- LiveKit Agent --------------------
 async def handle_audio(track: rtc.RemoteAudioTrack, room_name: str):

@@ -50,10 +50,11 @@ class SentenceChunker:
         return leftover
     
 class StreamingVoiceAgent:
-    def __init__(self, llm, tts, audio_source):
+    def __init__(self, llm, tts, audio_source,interview_engine):
         self.llm = llm
         self.tts = tts
         self.audio_source = audio_source
+        self.interview_engine = interview_engine
         self.turn_start = None
         self.first_audio_emitted = None
         self.tts_queue = asyncio.Queue()
@@ -70,35 +71,35 @@ class StreamingVoiceAgent:
                     now = asyncio.get_event_loop().time()
                     print(f"⏱ First Audio Latency: {now - self.turn_start:.3f}s")
                     self.first_audio_emitted = True
-
-            await self.publish_audio(audio_chunk)
+                await self.publish_audio(audio_chunk)
+            
             await asyncio.sleep(0.05)
             self.tts_queue.task_done()
 
     async def handle_turn(self, prompt: str, stt_done_time: float):
+        if not prompt.strip() and self.interview_engine.state["last_question"]:
+            return
+        
         self.turn_start = stt_done_time
         self.first_audio_emitted = False
-        first_token_time = None
         chunker = SentenceChunker()
         tts_task = asyncio.create_task(self._tts_worker())
-
-        async for token in self.llm.stream_response(prompt):
-            if first_token_time is None:
-                first_token_time = asyncio.get_event_loop().time()
-                print(f"⏱ First Token Latency: {first_token_time - self.turn_start:.3f}s")
+    
+        # Stream tokens
+        async for token in self.interview_engine.stream_step(prompt):
             chunks = await chunker.feed(token)
-
             for sentence in chunks:
                 await self.tts_queue.put(sentence)
-
-        # Flush leftover
-        remaining = chunker.flush()
-        if remaining:
-            await self.tts_queue.put(remaining)
-
+        
+        # After ALL tokens processed
+        leftover = chunker.flush()
+        if leftover:
+            await self.tts_queue.put(leftover)
+        
+        # Signal end and wait for TTS to finish
         await self.tts_queue.put(None)
         await tts_task
-
+        
     # --------- HELPER ------------
 
     async def publish_audio(self, audio_chunk):

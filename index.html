@@ -2,31 +2,124 @@
 <html>
 
 <head>
-    <title>LiveKit Interview Test</title>
+    <title>AI Interview Agent</title>
+
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            background: #0f172a;
+            color: white;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            width: 600px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        button {
+            background: #3b82f6;
+            border: none;
+            color: white;
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #2563eb;
+        }
+
+        button:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #94a3b8;
+        }
+
+        .mic {
+            margin-top: 25px;
+            font-size: 18px;
+        }
+    </style>
 </head>
 
 <body>
-    <h2>LiveKit Interview Test</h2>
-    <button onclick="connectRoom()">Connect</button>
+
+    <div class="container">
+
+        <div class="card">
+
+            <h1>🎙️ AI Technical Interview</h1>
+
+            <button id="connectBtn">Start Interview</button>
+
+            <div class="status" id="status">
+                Status: Idle
+            </div>
+
+            <div class="mic" id="mic">
+                🎤 Microphone inactive
+            </div>
+
+        </div>
+
+    </div>
+
     <script type="module">
+
         import { Room } from "https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.esm.mjs";
+
+        const statusEl = document.getElementById("status");
+        const micEl = document.getElementById("mic");
+        const button = document.getElementById("connectBtn");
 
         async function fetchToken() {
             const res = await fetch("http://localhost:8000/token");
-            const data = await res.json();
-            return data;
+            return await res.json();
         }
 
-        window.connectRoom = async function () {
+        button.onclick = async () => {
+
+            button.disabled = true;
+            statusEl.textContent = "Status: Connecting...";
+
             const data = await fetchToken();
 
             const room = new Room();
 
             room.on("trackSubscribed", (track, publication, participant) => {
+
                 if (track.kind === "audio") {
-                    console.log("Subscribed to audio track from:", participant.identity);
-                    const audioElement = track.attach();
-                    document.body.appendChild(audioElement);
+
+                    const audio = track.attach();
+                    audio.autoplay = true;
+
+                    document.body.appendChild(audio);
+
+                    statusEl.textContent = "Status: Interview in progress";
                 }
             });
 
@@ -34,9 +127,14 @@
 
             await room.localParticipant.enableCameraAndMicrophone();
 
-            console.log("Connected to LiveKit room:", data.room);
+            micEl.textContent = "🎤 Microphone active";
+
+            console.log("Connected to room:", data.room);
+
         };
+
     </script>
+
 </body>
 
 </html>
