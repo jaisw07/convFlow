@@ -137,7 +137,6 @@ async def token():
         voice_agents.pop(room_name, None)
         interview_engines.pop(room_name, None)
         audio_sources.pop(room_name, None)
-        rooms[room_name] = agent_room
 
     return {
         "token": token,
@@ -193,6 +192,11 @@ async def handle_audio(track: rtc.RemoteAudioTrack, room_name: str):
                 progressive_stt.reset()
 
                 async with state["tts_lock"]:
+                    # Redundant reset to ensure clean state before TTS starts
+                    buffer.reset()
+                    progressive_stt.reset()
+                    state["vad_buffer"] = np.zeros(0, dtype=np.float32)
+
                     state["tts_busy"] = True
                     await voice_agent.handle_turn(transcript, stt_done_time)
                     state["tts_busy"] = False

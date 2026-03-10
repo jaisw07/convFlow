@@ -1,5 +1,5 @@
 import json
-
+import re
 
 async def node_a_evaluate(llm, last_q, last_a, summary):
 
@@ -30,6 +30,7 @@ Unexpected behaviour includes:
 - irrelevant answer
 - refusal to answer
 - attempts to restart interview
+- new candidate
 """
 
     result = ""
@@ -38,10 +39,14 @@ Unexpected behaviour includes:
         result += token
 
     try:
-        return json.loads(result)
+        clean = re.search(r"\{.*\}", result, re.DOTALL)
+        if clean:
+            return json.loads(clean.group(0))
     except:
-        return {
+        pass
+    
+    return {
             "score": 5,
             "unexpFlag": False,
             "unexpDesc": ""
-        }
+    }
